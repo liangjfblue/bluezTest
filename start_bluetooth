@@ -1,0 +1,95 @@
+#!/bin/sh
+export PATH="$PATH:/mnt/platform/bin:/mnt/platform/sbin"
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/mnt/platform/lib"
+
+for i in $(seq 3)
+do
+        if test -e /mnt/tmp/hciname
+        then
+                sync
+                read hciname < /mnt/tmp/hciname
+                if [ $? -eq 0 ]
+                then
+                        echo "bluetooth name has been write"
+                        break
+                else
+                        echo "/mnt/tmp/hciname has been found,but not write"
+                        sync
+                fi
+        else
+                echo "/mnt/tmp/hciname has not been found, so find it again"
+                sync
+fi
+done
+
+#init and enable to switch the bluetooth device gpio
+dev_up () {
+        echo 1 > /sys/class/gpio/pioA7/value
+        usleep 110000
+        hciattach /dev/ttyS2 texas
+
+}
+
+#unenable to switch the bluetooth device gpio,and kill the hciattach process
+dev_down () {
+        killall -q hciattach
+        echo 0 > /sys/class/gpio/pioA7/value
+}
+
+#run the bluetoothd process,and set the agent
+main_up () {
+        bluetoothd	#the Bluetooth daemon
+        usleep 50000
+        usleep 50000
+
+        agent --path /org/bluez/agent 1234 &
+}
+
+#kill the bluetoothd and agent process
+main_down () {
+        killall -q agent
+        killall -q bluetoothd
+}
+
+#open and set the bluetooth services
+srv_up () {
+        pand -s -r NAP -M -u /etc/init.d/bnep_up.sh
+        sdptool add SP
+        usleep 10
+        hciconfig hci0 piscan auth sspmode 1
+}
+
+#stop and kill the bluetooth services
+srv_down () {
+        killall -q pand
+        killall -q rfcomm
+}
+
+
+#accorfing to the commond params to switch start/stop/restart
+case $1 in
+        start)
+                $0 stop
+                dev_up	#使能硬件gpio，开启蓝牙功能
+                main_up	#开启蓝牙守护进程，并设置配对信息
+                srv_up	#开启蓝牙服务
+                hciconfig Set name $hciname	#设置本机蓝牙名字
+                hciconfig hci0 up
+                hciconfig hci0 noauth	#设置禁用身份验证
+                hciconfig hci0 down
+                hciconfig hci0 up
+                echo "bluetooth start ok"
+        ;;
+        stop)
+                srv_down
+                main_down
+                dev_down
+        ;;
+        restart)
+                $0 stop
+                sleep 1
+                $0 start
+        ;;
+        *)
+                echo "Usage: $0 start|stop|restart"
+esac
